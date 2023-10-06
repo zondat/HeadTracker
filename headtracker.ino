@@ -1,74 +1,11 @@
-
 #include <Wire.h>
-////////////////////// MPU 6050 //////////////////////////////////
-//Measure Angle with a MPU-6050(GY-521)
-const int MPU_addr=0x68;
-int16_t AcX,AcY,AcZ,Tmp,GyX,GyY,GyZ;
-int minVal=265;
-int maxVal=402;
-int roll, pitch, yaw;
-int maxRoll = 0, maxPitch = 0, maxYaw = 0;
-int minRoll = 360, minPitch = 360, minYaw = 360;
-int offsetRoll = 0, offsetPitch = 0, offsetYaw = 0;
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
 
-void getMotion(int* roll, int* pitch, int* yaw, int offsetRoll = 0, int offsetPitch = 0, int offsetYaw = 0) {
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU_addr,14,true);
-
-  AcX=Wire.read()<<8|Wire.read();
-  AcY=Wire.read()<<8|Wire.read();
-  AcZ=Wire.read()<<8|Wire.read();
-
-  int xAng = map(AcX,minVal,maxVal,-90,90);
-  int yAng = map(AcY,minVal,maxVal,-90,90);
-  int zAng = map(AcZ,minVal,maxVal,-90,90);
-
-  *roll = RAD_TO_DEG * (atan2(-yAng, -zAng)+PI) - offsetRoll;
-  *pitch = RAD_TO_DEG * (atan2(-xAng, -zAng)+PI) - offsetPitch;
-  *yaw = RAD_TO_DEG * (atan2(-yAng, -xAng)+PI) - offsetYaw;
-}
-
-void calibrate() {
-getMotion(&offsetRoll, &offsetPitch, &offsetYaw);
-
-  Serial.println("Rotate around X");
-  for (int i=0; i<100; i++) {
-    delay(25);
-    getMotion(&roll, &pitch, &yaw);
-    if (roll > maxRoll) maxRoll = roll;
-    if (roll < minRoll) minRoll = roll;
-  }
-  maxRoll = maxRoll - offsetRoll;
-  minRoll = minRoll - offsetRoll;
-  Serial.println("Min, max roll: " + String(minRoll) + ", " + String(maxRoll));
-
-  delay(1000);
-  Serial.println("Rotate around Y");
-  for (int i=0; i<100; i++) {
-    delay(25);
-    getMotion(&roll, &pitch, &yaw);
-    if (pitch > maxPitch) maxPitch = pitch;
-    if (pitch < minPitch) minPitch = pitch;
-  }
-  maxPitch = maxPitch - offsetPitch;
-  minPitch = minPitch - offsetPitch;
-  Serial.println("Min, max pitch: " + String(minPitch) + ", " + String(maxPitch));
-
-  delay(1000);
-  Serial.println("Rotate around Z");
-  for (int i=0; i<100; i++) {
-    delay(25);
-    getMotion(&roll, &pitch, &yaw);
-    if (yaw > maxYaw) maxYaw = yaw;
-    if (yaw < minYaw) minYaw = yaw;
-  }
-  maxYaw = maxYaw - offsetYaw;
-  minYaw = minYaw - offsetYaw;
-  Serial.println("Min, max yaw: " + String(minYaw) + ", " + String(maxYaw));
-  delay(1000);
-}
+Adafruit_MPU6050 mpu;
+sensors_event_t accel, gyro, temp;
+#define ANGLE_RATE_MAX 5 // rad/s
+#define ANGLE_RATE_MIN -5 // rad/s
 
 //////////////////////CONFIGURATION///////////////////////////////
 #include "PPMEncoder.h"
@@ -85,14 +22,19 @@ getMotion(&offsetRoll, &offsetPitch, &offsetYaw);
  change theese values in your code (usually servo values move between 1000 and 2000)*/
 int ppm[CHANNEL_NUMBER];
 
-void setup(){    
+void setup(){   
+  // Serial.begin(9600);
+
   // Mpu6050 settings
-  Wire.begin();
-  Wire.beginTransmission(MPU_addr);
-  Wire.write(0x6B);
-  Wire.write(0);
-  Wire.endTransmission(true);
-  calibrate();
+  while (!mpu.begin()) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(250);
+    digitalWrite(LED_BUILTIN, LOW);
+    delay(250);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_4_G);
+  mpu.setGyroRange(MPU6050_RANGE_250_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_184_HZ);
 
   //initiallize default ppm values
   for(int i=0; i<CHANNEL_NUMBER; i++){
@@ -101,24 +43,17 @@ void setup(){
 
   // PPM encoder
   ppmEncoder.begin(sigPin);
-
-  // pinMode(sigPin, OUTPUT);
-  // writePPM();
 }
 
 void loop(){
+  mpu.getEvent(&accel, &gyro, &temp);
 
-  getMotion(&roll, &pitch, &yaw, offsetRoll, offsetPitch, offsetYaw);
+  ppm[0] = map(gyro.orientation.roll, ANGLE_RATE_MIN, ANGLE_RATE_MAX, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
+  ppm[1] = map(gyro.orientation.pitch, ANGLE_RATE_MIN, ANGLE_RATE_MAX, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
+  ppm[2] = map(gyro.orientation.heading, ANGLE_RATE_MIN, ANGLE_RATE_MAX, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
 
-  long ppmRoll = map(roll, minRoll, maxRoll, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
-  long ppmPitch = map(pitch, minPitch, maxPitch, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
-  long ppmYaw = map(yaw, minYaw, maxYaw, CHANNEL_MIN_VALUE, CHANNEL_MAX_VALUE);
-
-  ppmEncoder.setChannel(0, ppmRoll);
-  ppmEncoder.setChannel(1, ppmPitch);
-  ppmEncoder.setChannel(2, ppmYaw);  
   for (int i=3; i<CHANNEL_NUMBER; i++) {
-    ppmEncoder.setChannel(i, CHANNEL_DEFAULT_VALUE);
+    ppmEncoder.setChannel(i, ppm[i]);
   }
 }
 
